@@ -2,6 +2,7 @@ import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
+import http from 'http';
 
 // Programmatically load .env configuration if present
 if (fs.existsSync('.env')) {
@@ -256,3 +257,19 @@ client.on('message', async (msg) => {
 
 // Start the client
 client.initialize();
+
+// Start a simple health check server for Render / health checks
+const PORT = process.env.PORT || 10000;
+const server = http.createServer((req, res) => {
+    if (req.url === '/health' || req.url === '/') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+    } else {
+        res.writeHead(404);
+        res.end();
+    }
+});
+
+server.listen(PORT, () => {
+    console.log(`[Health Server] Listening on port ${PORT}`);
+});

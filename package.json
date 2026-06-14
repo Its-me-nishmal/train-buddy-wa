@@ -5,6 +5,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "build": "npx puppeteer browsers install chrome",
     "start": "node --env-file=.env index.js"
   },
   "dependencies": {
