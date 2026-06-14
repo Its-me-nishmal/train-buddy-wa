@@ -66,7 +66,7 @@ const client = new Client({
             '--disable-extensions',
             '--disable-component-extensions-with-background-pages',
             '--mute-audio',
-            '--js-flags=--max-old-space-size=150',
+            '--js-flags=--expose-gc --max-old-space-size=150',
             '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
         ]
     }
@@ -307,6 +307,25 @@ const interceptInterval = setInterval(async () => {
         }
     }
 }, 50);
+
+// Active memory management: Run garbage collection every 2 minutes to prevent memory leaks from message flows
+setInterval(async () => {
+    if (client.pupPage) {
+        try {
+            console.log('[Memory Cleanup] Running garbage collection in Puppeteer...');
+            await client.pupPage.evaluate(() => {
+                if (window.gc) {
+                    window.gc();
+                }
+            });
+            if (global.gc) {
+                global.gc();
+            }
+        } catch (err) {
+            console.warn('[Memory Cleanup] GC failed or not exposed:', err.message);
+        }
+    }
+}, 2 * 60 * 1000);
 
 // Start a simple health check server for Render / health checks
 const PORT = process.env.PORT || 10000;

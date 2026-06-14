@@ -6,7 +6,7 @@
   "main": "index.js",
   "scripts": {
     "build": "npx puppeteer browsers install chrome",
-    "start": "node --env-file=.env index.js"
+    "start": "node --expose-gc --env-file=.env index.js"
   },
   "dependencies": {
     "whatsapp-web.js": "^1.23.0",
