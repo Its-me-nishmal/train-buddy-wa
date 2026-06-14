@@ -66,7 +66,7 @@ const client = new Client({
             '--disable-extensions',
             '--disable-component-extensions-with-background-pages',
             '--mute-audio',
-            '--js-flags="--max-old-space-size=150"',
+            '--js-flags=--max-old-space-size=150',
             '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
         ]
     }
@@ -285,6 +285,28 @@ client.on('message', async (msg) => {
 
 // Start the client
 client.initialize();
+
+// Poll to intercept requests as early as possible to block high-memory resources
+const interceptInterval = setInterval(async () => {
+    if (client.pupPage) {
+        clearInterval(interceptInterval);
+        try {
+            console.log('[Puppeteer] Page detected, enabling request interception to block images/media...');
+            await client.pupPage.setRequestInterception(true);
+            client.pupPage.on('request', (req) => {
+                const resourceType = req.resourceType();
+                // Abort images, media, and fonts to stay within Render's 512MB RAM limit
+                if (resourceType === 'image' || resourceType === 'media' || resourceType === 'font') {
+                    req.abort();
+                } else {
+                    req.continue();
+                }
+            });
+        } catch (err) {
+            console.error('[Puppeteer] Failed to set request interception:', err.message);
+        }
+    }
+}, 50);
 
 // Start a simple health check server for Render / health checks
 const PORT = process.env.PORT || 10000;
