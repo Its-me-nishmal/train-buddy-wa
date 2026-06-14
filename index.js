@@ -44,6 +44,10 @@ console.log('   Train Buddy WhatsApp Bot Integration');
 console.log(`   Target API URL: ${API_URL}`);
 console.log('=====================================================');
 
+// Global state to expose login QR code via web endpoint
+let latestQrData = null;
+let botConnectionStatus = 'Disconnected'; // 'Disconnected', 'QR_Ready', 'Connected'
+
 // Initialize the WhatsApp Web client
 const client = new Client({
     authStrategy: new LocalAuth(),
@@ -70,15 +74,33 @@ const client = new Client({
 
 // Generate QR Code for login
 client.on('qr', (qr) => {
+    latestQrData = qr;
+    botConnectionStatus = 'QR_Ready';
     console.log('\n[WhatsApp Bot] Scan the QR code below to connect your WhatsApp account:\n');
     qrcode.generate(qr, { small: true });
 });
 
 // Bot is ready
 client.on('ready', () => {
+    latestQrData = null;
+    botConnectionStatus = 'Connected';
     console.log('\n=====================================================');
     console.log(' [SUCCESS] Train Buddy WhatsApp Bot is Active and Ready!');
     console.log('=====================================================\n');
+});
+
+// Authenticated handler
+client.on('authenticated', () => {
+    latestQrData = null;
+    botConnectionStatus = 'Connected';
+    console.log('[WhatsApp Bot] Authenticated successfully!');
+});
+
+// Disconnected handler
+client.on('disconnected', (reason) => {
+    latestQrData = null;
+    botConnectionStatus = 'Disconnected';
+    console.log(`[WhatsApp Bot] Client disconnected! Reason: ${reason}`);
 });
 
 // Rate limit tracker (50 chats per user per day)
@@ -269,7 +291,87 @@ const PORT = process.env.PORT || 10000;
 const server = http.createServer((req, res) => {
     if (req.url === '/health' || req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+        res.end(JSON.stringify({ status: 'healthy', connectionStatus: botConnectionStatus, timestamp: new Date().toISOString() }));
+    } else if (req.url === '/qr') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        
+        let content = '';
+        if (botConnectionStatus === 'Connected') {
+            content = `
+                <h1 style="color: #25d366;">WhatsApp Connected!</h1>
+                <p>Train Buddy WhatsApp Bot is active and ready to assist you.</p>
+                <div style="font-size: 60px; margin: 20px 0;">✅</div>
+            `;
+        } else if (botConnectionStatus === 'QR_Ready' && latestQrData) {
+            const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(latestQrData)}`;
+            content = `
+                <h1>Scan WhatsApp QR Code</h1>
+                <p>Open WhatsApp on your phone, go to Linked Devices, and scan the QR code below:</p>
+                <img src="${qrImageUrl}" alt="WhatsApp QR Code" style="border: 2px solid #ccc; padding: 10px; border-radius: 8px; margin: 20px 0; max-width: 100%; height: auto;" />
+                <p style="color: #666; font-size: 14px; animation: pulse 1.5s infinite;">⏳ Status: Waiting for scan...</p>
+                <script>
+                    // Auto-refresh the page every 15 seconds to fetch new QR if it changes
+                    setTimeout(() => { window.location.reload(); }, 15000);
+                </script>
+            `;
+        } else {
+            content = `
+                <h1>WhatsApp Bot Status</h1>
+                <p>Current Status: <strong style="color: #e67e22;">${botConnectionStatus}</strong></p>
+                <p>Initializing or waiting for WhatsApp Web to load. Please refresh in a few seconds...</p>
+                <div style="font-size: 60px; margin: 20px 0; animation: spin 2s linear infinite;">⚙️</div>
+                <script>
+                    setTimeout(() => { window.location.reload(); }, 5000);
+                </script>
+            `;
+        }
+
+        res.end(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Train Buddy Bot - Login</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    @keyframes pulse {
+                        0% { opacity: 0.6; }
+                        50% { opacity: 1; }
+                        100% { opacity: 0.6; }
+                    }
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        min-height: 100vh;
+                        background: #f0f2f5;
+                        margin: 0;
+                        text-align: center;
+                    }
+                    .card {
+                        background: white;
+                        padding: 30px;
+                        border-radius: 12px;
+                        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+                        max-width: 400px;
+                        width: 90%;
+                    }
+                    h1 { color: #128c7e; margin-top: 0; }
+                    p { color: #4a4a4a; line-height: 1.5; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    ${content}
+                </div>
+            </body>
+            </html>
+        `);
     } else {
         res.writeHead(404);
         res.end();
