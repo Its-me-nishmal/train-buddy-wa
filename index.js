@@ -1,5 +1,8 @@
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, RemoteAuth } = pkg;
+import mongoose from 'mongoose';
+import wwebjsMongo from 'wwebjs-mongo';
+const { MongoStore } = wwebjsMongo;
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import http from 'http';
@@ -49,28 +52,59 @@ let latestQrData = null;
 let botConnectionStatus = 'Disconnected'; // 'Disconnected', 'QR_Ready', 'Connected'
 
 // Initialize the WhatsApp Web client
-const client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        headless: true,
-        executablePath: getChromePath(),
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--single-process',
-            '--disable-extensions',
-            '--disable-component-extensions-with-background-pages',
-            '--mute-audio',
-            '--js-flags=--expose-gc --max-old-space-size=150',
-            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-        ]
+const MONGODB_URI = process.env.MONGODB_URI;
+let client;
+
+const puppeteerConfig = {
+    headless: true,
+    executablePath: getChromePath(),
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu',
+        '--single-process',
+        '--disable-extensions',
+        '--disable-component-extensions-with-background-pages',
+        '--mute-audio',
+        '--js-flags=--expose-gc --max-old-space-size=150',
+        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    ]
+};
+
+if (MONGODB_URI) {
+    console.log('[Auth Status] MONGODB_URI detected. Setting up MongoDB session store...');
+    try {
+        await mongoose.connect(MONGODB_URI);
+        console.log('[Auth Status] Connected to MongoDB successfully.');
+        
+        const store = new MongoStore({ mongoose: mongoose });
+        client = new Client({
+            authStrategy: new RemoteAuth({
+                store: store,
+                backupSyncIntervalMs: 300000 // Backup every 5 minutes
+            }),
+            puppeteer: puppeteerConfig
+        });
+        
+        client.on('remote_session_saved', () => {
+            console.log('[Auth Status] Remote session saved to MongoDB successfully!');
+        });
+    } catch (err) {
+        console.error('[Auth Status] Failed to initialize MongoDB Auth. Falling back to LocalAuth...', err.message);
     }
-});
+}
+
+if (!client) {
+    console.log('[Auth Status] Using LocalAuth for session management...');
+    client = new Client({
+        authStrategy: new LocalAuth(),
+        puppeteer: puppeteerConfig
+    });
+}
 
 // Generate QR Code for login
 client.on('qr', (qr) => {
