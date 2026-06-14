@@ -130,11 +130,9 @@ client.on('message', async (msg) => {
         const sender = msg.from;
 
         // Check if there was an active session that has now timed out
-        let sessionWasCleared = false;
         if (chatContexts[sender]) {
             const idleTime = Date.now() - chatContexts[sender].lastActivity;
             if (idleTime > CONTEXT_TIMEOUT_MS && chatContexts[sender].history.length > 0) {
-                sessionWasCleared = true;
                 delete chatContexts[sender];
             }
         }
@@ -149,19 +147,30 @@ client.on('message', async (msg) => {
 
         if (rateLimits[sender].count >= DAILY_LIMIT) {
             console.log(`[Rate Limited] Blocked query from ${sender} (Reached daily limit of ${DAILY_LIMIT})`);
-            await msg.reply('ക്ഷമിക്കണം, ഇന്നത്തെ നിങ്ങളുടെ പരിധി (50 ചോദ്യങ്ങൾ) കഴിഞ്ഞിരിക്കുന്നു. ദയവായി നാളെ വീണ്ടും ശ്രമിക്കുക.');
+            const isMalayalamOrManglish = (text) => {
+                const malayalamRegex = /[\u0D00-\u0D7F]/;
+                const manglishKeywords = /\b(nale|nale\?|trainukal|edayil|ethokke|ninn|poyal|samayam|ethum|ethuka|ravile|vaikit|varum|unda|undo|illa|illa\?|pokum|ezhudha|paraya|eppo|eppozha|eppol|evide|evideya)\b/i;
+                return malayalamRegex.test(text) || manglishKeywords.test(text);
+            };
+            if (isMalayalamOrManglish(prompt)) {
+                await msg.reply('ക്ഷമിക്കണം, ഇന്നത്തെ നിങ്ങളുടെ പരിധി (50 ചോദ്യങ്ങൾ) കഴിഞ്ഞിരിക്കുന്നു. ദയവായി നാളെ വീണ്ടും ശ്രമിക്കുക.');
+            } else {
+                await msg.reply('Sorry, you have reached your daily limit of 50 queries. Please try again tomorrow.');
+            }
             return;
-        }
-
-        // Notify user if session has been cleared due to inactivity
-        if (sessionWasCleared) {
-            await msg.reply('⚠️ Session auto-cleared!');
         }
 
         // Initialize user context history if not present
         if (!chatContexts[sender]) {
-            chatContexts[sender] = { history: [], lastActivity: Date.now() };
+            chatContexts[sender] = { history: [], lastActivity: Date.now(), processing: false };
         }
+
+        // Concurrency Lock: Drop/Ignore spam queries if already processing a query for this user
+        if (chatContexts[sender].processing) {
+            console.log(`[Spam Blocked] Ignored concurrent request from ${sender}`);
+            return;
+        }
+        chatContexts[sender].processing = true;
 
         // Try to identify a 5-digit train number from current prompt or history
         let activeTrain = null;
@@ -192,41 +201,47 @@ client.on('message', async (msg) => {
         rateLimits[sender].count += 1;
         console.log(`[Message Received] From: ${sender} | Count: ${rateLimits[sender].count}/${DAILY_LIMIT} | Active Train: ${activeTrain || 'None'} | Query: "${prompt}"`);
 
-        // Send "typing..." status indicator
-        await chat.sendStateTyping();
-
         // 1. Build the API target URL
         let url = `${API_URL}/api/assistant?prompt=${encodeURIComponent(promptWithContext)}`;
         if (activeTrain) {
             url += `&train=${activeTrain}`;
         }
 
-        // 2. Fetch answer from the Train Buddy serverless endpoint
-        const response = await fetch(url);
-        if (!response.ok) {
-            console.error(`[API Error] Status Code: ${response.status}`);
-            await msg.reply('മറുപടി ലഭിക്കുന്നതിൽ തടസ്സം നേരിട്ടു. ദയവായി അല്പം കഴിഞ്ഞ് വീണ്ടും ശ്രമിക്കുക. (API connection failed)');
-            return;
-        }
+        try {
+            // Send "typing..." status indicator
+            await chat.sendStateTyping();
 
-        const data = await response.json();
-        
-        if (data.success && data.response) {
-            console.log(`[Reply Sent] To: ${msg.from} | Response: "${data.response}"`);
-            await msg.reply(data.response);
-
-            // Save exchange to history
-            chatContexts[sender].history.push({ role: 'user', text: prompt });
-            chatContexts[sender].history.push({ role: 'assistant', text: data.response });
-            
-            // Limit history to last 3 exchanges (6 messages) to avoid bloat
-            if (chatContexts[sender].history.length > 6) {
-                chatContexts[sender].history.shift();
-                chatContexts[sender].history.shift();
+            // 2. Fetch answer from the Train Buddy serverless endpoint
+            const response = await fetch(url);
+            if (!response.ok) {
+                console.error(`[API Error] Status Code: ${response.status}`);
+                await msg.reply('മറുപടി ലഭിക്കുന്നതിൽ തടസ്സം നേരിട്ടു. ദയവായി അല്പം കഴിഞ്ഞ് വീണ്ടും ശ്രമിക്കുക. (API connection failed)');
+                return;
             }
-            chatContexts[sender].lastActivity = Date.now();
-        } else {
-            await msg.reply(data.error || 'ക്ഷമിക്കണം, എനിക്ക് നിങ്ങളുടെ ചോദ്യം മനസ്സിലാക്കാൻ കഴിഞ്ഞില്ല. ഒരു ട്രെയിൻ നമ്പറോ സ്റ്റേഷൻ പേരോ നൽകുക.');
+
+            const data = await response.json();
+            
+            if (data.success && data.response) {
+                console.log(`[Reply Sent] To: ${msg.from} | Response: "${data.response}"`);
+                await msg.reply(data.response);
+
+                // Save exchange to history
+                chatContexts[sender].history.push({ role: 'user', text: prompt });
+                chatContexts[sender].history.push({ role: 'assistant', text: data.response });
+                
+                // Limit history to last 10 exchanges (20 messages) to maintain context
+                if (chatContexts[sender].history.length > 20) {
+                    chatContexts[sender].history.shift();
+                    chatContexts[sender].history.shift();
+                }
+                chatContexts[sender].lastActivity = Date.now();
+            } else {
+                await msg.reply(data.error || 'ക്ഷമിക്കണം, എനിക്ക് നിങ്ങളുടെ ചോദ്യം മനസ്സിലാക്കാൻ കഴിഞ്ഞില്ല. ഒരു ട്രെയിൻ നമ്പറോ സ്റ്റേഷൻ പേരോ നൽകുക.');
+            }
+        } finally {
+            if (chatContexts[sender]) {
+                chatContexts[sender].processing = false;
+            }
         }
 
     } catch (error) {
